@@ -64,4 +64,5 @@ def train_student(student, teacher, loader, temperature=2.0, lr=1e-3, epochs=3, 
             loop.set_postfix(loss=train_loss / (batch_idx + 1), acc=100. * correct / total,
                              correct_total=f"[{correct}"f"/{total}]", ber_student=f"{ber_student:4f}", ber_teacher=f"{ber_teacher:4f}")
 
-    return student.state_dict()
+    # return student.state_dict()
+    return student
