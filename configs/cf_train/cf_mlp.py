@@ -1,6 +1,6 @@
 import torch.nn as nn
 
-from configs.cf_data.cf_data import cf_mnist_data
+from configs.cf_data.cf_data import cf_mnist_data, cf_cifar10_data
 
 config_data = cf_mnist_data
 

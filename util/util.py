@@ -162,10 +162,40 @@ class Database:
 
     @staticmethod
     def load_dataset_loaders(config):
-        dataset = torch.load(config["save_path"])
+
+
+        dataset = torch.load(config["save_path"], weights_only=False)
         print("loading the following database... ", config["database"])
         return dataset["train_loader"], dataset["test_loader"]
 
+    @staticmethod
+    def get_normalization_params(database):
+        """Get normalization parameters matching get_transforms logic"""
+        if database == "mnist":
+            return {"mean": (0.1307,), "std": (0.3081,)}
+        elif database == "cifar10":
+            return {"mean": (0.4914, 0.4822, 0.4465), "std": (0.2023, 0.1994, 0.2010)}
+        else:
+            raise Exception("Unknown database")
+
+    @staticmethod
+    def create_denormalize_function(database):
+        """Create denormalization function for the given database"""
+        norm_params = Database.get_normalization_params(database)
+        mean = torch.tensor(norm_params["mean"]).view(-1, 1, 1)
+        std = torch.tensor(norm_params["std"]).view(-1, 1, 1)
+
+        def denormalize(tensor):
+            mean_device = mean.to(tensor.device)
+            std_device = std.to(tensor.device)
+
+            # Denormalize: x = (x * std) + mean
+            denorm = (tensor * std_device) + mean_device
+
+            # Clamp to [0, 1]
+            return torch.clamp(denorm, 0, 1)
+
+        return denormalize
 
 class TrainModel:
     @staticmethod
@@ -286,7 +316,7 @@ class TrainModel:
     @staticmethod
     def load_model(path):
         print('Loading model...')
-        state = torch.load(path)
+        state = torch.load(path,weights_only=False)
         return state
 
     @staticmethod
@@ -313,6 +343,9 @@ class TrainModel:
             model = ResNet18TwoLinear().to(device)
         elif architecture == "MLP_RIGA":
             model = MLP_RIGA().to(device)
+        elif architecture == "MLP2":
+            # ep50, bs =512, lr=0.01, opt=Adam
+            model = MLP(width=32,high=32,channels=3).to(device)
         else:
             raise Exception("architecture doesn't exist")
         return model
@@ -326,6 +359,8 @@ class TrainModel:
 
     @staticmethod
     def _get_optimizer(config, parameters):
+
+
         if config["opt"] == "SGD":
             optimizer = torch.optim.SGD(parameters, lr=config["lr"], momentum=config["momentum"],
                                         weight_decay=config["wd"])

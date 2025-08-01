@@ -1,8 +1,8 @@
 #!/bin/bash
 
-methods=("STDM") # values: ("DICTION", "DEEPSIGNS", "UCHIDA", "RES_ENCRYPT", "HUFUNET", "STDM")
-models=("MLP") # values: ("MLP" "CNN" "RESNET18" "MLP_RIGA")
-operations=("DISTILLATION") # values: ("TRAIN" "WATERMARKING" "PRUNING" "OVERWRITING" "FINE_TUNING" "SHOW" "PIA" "DUMMY_NEURONS" "DISTILLATION")
+methods=("HUFUNET") # values: ("DICTION", "DEEPSIGNS", "UCHIDA", "RES_ENCRYPT", "HUFUNET")
+models=("CNN") # values: ("MLP" "CNN" "RESNET18" "MLP_RIGA" "MLP2")
+operations=("FINE_TUNING") # values: ("TRAIN" "WATERMARKING" "TRAIN-WATERMARKING" "PRUNING" "OVERWRITING" "FINE_TUNING" "SHOW" "PIA" "DUMMY_NEURONS" "DISTILLATION")
 
 for method in "${methods[@]}"; do
     for model in "${models[@]}"; do

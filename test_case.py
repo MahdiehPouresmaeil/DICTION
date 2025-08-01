@@ -2,13 +2,17 @@ import os
 from copy import deepcopy
 from argparse import ArgumentParser
 import datetime
-
+import torch
+from watermark.hufunet import HufuNet, extract, test_hufu
+from networks.cnn import CnnModel
+from util.util import Database
 # Data configuration
 from configs.cf_data.cf_data import cf_mnist_data, cf_cifar10_data
-
+from util.util import TrainModel
 # Model configurations
 from configs.cf_train.cf_cnn import cf_cnn_dict
 from configs.cf_train.cf_mlp import cf_mlp_dict
+from configs.cf_train.cf_mlp_cifar import cf_mlp_dict_cifar
 from configs.cf_train.cf_resnet18 import cf_resnet18_dict
 from configs.cf_train.cf_mlp_riga import cf_mlp_riga_dict
 
@@ -23,6 +27,7 @@ method_configurations = {
     'RES_ENCRYPT': 'configs.cf_watermark.cf_res_encrypt',
     'RIGA': 'configs.cf_watermark.cf_riga',
     'HUFUNET': 'configs.cf_watermark.cf_hufunet',
+    'STDM': 'configs.cf_watermark.cf_stdm',
 }
 
 # Model configurations
@@ -37,6 +42,8 @@ model_configurations = {
     'MLP_RIGA': (cf_mlp_riga_dict, cf_mnist_data, 'cf_mlp_riga_embed', 'cf_mlp_riga_attack_ft',
                  'cf_mlp_riga_attack_pr', 'cf_mlp_riga_attack_ow', 'cf_mlp_riga_attack_pia',
                  'cf_mlp_riga_attack_dummy_neurons', 'cf_mlp_riga_attack_distillation'),
+    # 'MLP2': (cf_mlp_dict_cifar, cf_cifar10_data, 'cf_mlp_embed2', 'cf_mlp_attack_ft', 'cf_mlp_attack_pr', 'cf_mlp_attack_ow',
+    #         'cf_mlp_attack_pia', 'cf_mlp_attack_dummy_neurons', 'cf_mlp_attack_distillation'),
 }
 
 # Parse arguments
@@ -60,6 +67,7 @@ method_module = __import__(method_configurations[method], fromlist=['*'])
 globals().update({k: getattr(method_module, k) for k in dir(method_module) if not k.startswith('__')})
 
 # Load model-specific configurations
+
 config_train, config_data, embed_name, ft_name, pr_name, ow_name, pia_name, dn_name, dt_name =  model_configurations[model]
 config_embed = globals()[embed_name]
 config_attack_ft = globals()[ft_name]
@@ -69,6 +77,7 @@ config_attack_pia = globals()[pia_name]
 cf_mlp_attack_dummy_neurons = globals()[dn_name]
 config_attack_distillation = globals()[dt_name]
 # Tests configuration
+
 _tests = Tests(method, model)
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
@@ -103,13 +112,40 @@ if __name__ == '__main__':
         print("ber=", ber / nb_run)
         print("runtime_wm to embed the watermark :", runtime_wm)
 
+    elif operation == "TRAIN-WATERMARKING":
+        print("\n---------------------- Train-Watermarking -----------------------------\n")
+        acc, ber, nb_run = 0, 0, 1
+        runtime_wm = -1
+        for i in range(nb_run):
+
+            t_start_wm = datetime.datetime.now()
+            temp_acc=_tests.train_embedding( deepcopy(config_data), deepcopy(config_embed))
+            runtime_wm = datetime.datetime.now() - t_start_wm
+
+            acc += temp_acc
+
+
+        print("acc=", acc / nb_run)
+
+        print("runtime_wm to embed the watermark :", runtime_wm)
+
+
+
     elif operation == "FINE_TUNING":
         print("\n---------------------- Fine-tuning attack -----------------------------\n")
-        _tests.fine_tune_attack(config_embed, config_attack_ft, config_data)
+        if method == "HUFUNET":
+            _tests.fine_tune_attack_hufu(config_embed, config_attack_ft, config_data)
+
+        else:
+            _tests.fine_tune_attack(config_embed, config_attack_ft, config_data)
 
     elif operation == "PRUNING":
         print("\n---------------------- Pruning attack ---------------------------------\n")
-        _tests.pruning_attack(config_embed, config_attack_pr, config_data)
+        if method == "HUFUNET":
+            _tests.pruning_attack_hufu(config_embed, config_attack_pr, config_data)
+
+        else:
+            _tests.pruning_attack(config_embed, config_attack_pr, config_data)
 
     elif operation == "OVERWRITING":
         print("\n---------------------- Overwriting attack -----------------------------\n")
@@ -128,7 +164,11 @@ if __name__ == '__main__':
         _tests.dummy_neurons_attack(config_embed=config_embed, config_attack=cf_mlp_attack_dummy_neurons,config_data=config_data)
 
     elif operation == "DISTILLATION":
-        _tests.distillation(config_embed=config_embed, config_attack=config_attack_distillation,config_data=config_data)
+        if method == "HUFUNET":
+            _tests.distillation_hufu(config_embed=config_embed, config_attack=config_attack_distillation,config_data=config_data)
+
+        else:
+            _tests.distillation(config_embed=config_embed, config_attack=config_attack_distillation,config_data=config_data)
 
     else:
         print(f"Unknown operation: {operation}")

@@ -1,3 +1,5 @@
+from copy import deepcopy
+
 import torch
 from torch import nn, optim
 from torchvision.transforms import transforms
@@ -10,10 +12,11 @@ from tqdm import tqdm
 
 from attacks.pruning import pruning
 from attacks.dummy_neurons import neuron_clique, neuron_split
-from attacks.distillation import train_student
+from attacks.distillation import train_student, train_student_hufu
 from networks.piadetector import PiaDetector
 from util.metric import Metric
 from util.util import TrainModel, Database, CustomTensorDataset
+from watermark.hufunet import create_data_loaders_hufu
 
 import torch.backends.cudnn
 torch.backends.cudnn.enabled = False
@@ -44,17 +47,23 @@ class Tests:
                 from watermark.riga import extract, embed
                 self.extract = extract
                 self.embed = embed
+            case "STDM":
+                from watermark.stdm import extract, embed
+                self.extract = extract
+                self.embed = embed
             case "HUFUNET":
-                # from watermark.hufunet import extract, embed
-                # self.extract = extract
-                # self.embed = embed
+                from watermark.hufunet import  embed ,extract
+                self.extract = extract
+                self.embed = embed
                 pass
             case _:
                 raise ValueError(f"method {method} not implemented")
 
     def embedding(self, config_embed, config_data):
         # Get the original model
+
         init_model = TrainModel.get_model(config_embed["architecture"], config_embed["device"])
+
         init_model.load_state_dict(TrainModel.load_model(config_embed["path_model"])['net'])
         # Get the training and testing data
         train_loader, test_loader = Database.load_dataset_loaders(config_data)
@@ -357,30 +366,217 @@ class Tests:
     def distillation(self, config_embed, config_attack, config_data):
         # start by laoding the data
         train_loader, test_loader = Database.load_dataset_loaders(config_data)
+
         # I need to load the watermarked model for having the watermarking parameters
         dict_model = TrainModel.load_model(config_embed['save_path'])
+
+
         model_wat = dict_model["supplementary"]["model"]
 
         print("Check the accuracy of the watermarked model")
         TrainModel.evaluate(model_wat, test_loader, config_embed)
 
+
+
         _, ber = self.extract(model_wat, dict_model["supplementary"])
         print("BER from the watermarked model (non attacked) == ", ber)
 
         # I need to load the teacher model that just has been attacked with the dummy neurons and called the teacher
-        teacher = torch.load(config_attack['path_model']).to(config_embed["device"])
+        # teacher = torch.load(config_attack['path_model'], weights_only=False).to(config_embed["device"])
+        teacher =deepcopy(model_wat).to(config_embed["device"])
+
+        #
+
 
         _, ber = self.extract(teacher, dict_model["supplementary"])
         print("BER of the teacher == ", ber)
 
         # I need to load the student model not watermarked and check if it s not watermarked
         student = TrainModel.get_model(config_embed["architecture"], config_embed["device"])
+
         student = train_student(student, teacher, train_loader, temperature=2.0, lr=1e-3,
                                 epochs=config_attack["epoch_attack"], supp=dict_model["supplementary"], device="cuda",
                       extract=self.extract, layer_name=config_attack["layer_name"])
 
+        savedir = os.path.dirname(config_attack['save_path'])
+        if not (os.path.exists(savedir)):
+            os.makedirs(savedir)
+
+        _, ber = self.extract(student, dict_model["supplementary"])
+        print("BER of the Student == ", ber)
+
 
         torch.save(student, config_attack['save_path'])
+
+    def distillation_hufu(self, config_embed, config_attack, config_data):
+        # start by laoding the data
+        train_loader, test_loader = Database.load_dataset_loaders(config_data)
+        train_loader_hufu, val_loader_hufu, test_loader_hufu = create_data_loaders_hufu(
+            batch_size=config_embed['batch_size_hufu'],
+            validation_split=config_embed['validation_split']
+        )
+
+
+        # I need to load the watermarked model for having the watermarking parameters
+        dict_model = TrainModel.load_model(config_embed['save_path'])
+        dict_hufu=TrainModel.load_model(config_embed['save_path_hufu_finetune'])
+
+
+        model_wat = dict_model["supplementary"]["model"].to(config_embed["device"])
+        hufu_model=dict_hufu["supplementary"]["model"].to(config_embed["device"])
+
+
+        print("Check the accuracy of the watermarked model")
+        acc=TrainModel.evaluate(model_wat, test_loader, config_embed)
+        print(acc)
+
+
+        mse_before, mse_after, mse_non_wm=self.extract(deepcopy(model_wat), deepcopy(hufu_model), dict_model["supplementary"]["selected_indexes"], train_loader_hufu, config_embed)
+        print(f"watermark model:    mse_before: {mse_before }, mse_after: {mse_after}")
+
+        # I need to load the teacher model that just has been attacked with the dummy neurons and called the teacher
+        # teacher = torch.load(config_attack['path_model'], weights_only=False).to(config_embed["device"])
+        teacher =deepcopy(model_wat).to(config_embed["device"])
+
+        #
+
+        mse_before, mse_after, mse_non_wm=self.extract(deepcopy(teacher), deepcopy(hufu_model), dict_model["supplementary"]["selected_indexes"], train_loader_hufu,
+                     config_embed)
+        print(f"teacher model:     mse_before: {mse_before}, mse_after: {mse_after}")
+
+
+        # I need to load the student model not watermarked and check if it s not watermarked
+        student = TrainModel.get_model(config_embed["architecture"], config_embed["device"])
+
+        student = train_student_hufu(student, teacher, train_loader, temperature=2.0, lr=1e-3,
+                                         epochs=config_attack["epoch_attack"], supp=dict_model["supplementary"],
+                                         device="cuda",
+                                         extract=self.extract, layer_name=config_attack["layer_name"],
+                                     hufu_model=hufu_model,selected_indexes=dict_model["supplementary"]["selected_indexes"],
+                                     train_loader_hufu=train_loader_hufu, config=config_embed)
+
+
+        savedir = os.path.dirname(config_attack['save_path'])
+        if not (os.path.exists(savedir)):
+            os.makedirs(savedir)
+
+
+        mse_before, mse_after, mse_non_wm=self.extract(deepcopy(student), deepcopy(hufu_model), dict_model["supplementary"]["selected_indexes"], train_loader_hufu, config_embed)
+        print(f"student model:     mse_before: {mse_before}, mse_after: {mse_after}")
+
+
+
+
+        torch.save(student, config_attack['save_path'])
+
+    def fine_tune_attack_hufu(self, config_embed, config_attack, config_data):
+        # Get data
+        train_loader, test_loader = Database.load_dataset_loaders(config_data)
+        train_loader_hufu, val_loader_hufu, test_loader_hufu = create_data_loaders_hufu(
+            batch_size=config_embed['batch_size_hufu'],
+            validation_split=config_embed['validation_split']
+        )
+
+        # Get model
+        init_model = TrainModel.get_model(config_embed["architecture"], config_embed["device"])
+        init_model.load_state_dict(TrainModel.load_model(config_embed["path_model"])['net'])
+
+
+        # init_model.eval()
+        # load the watermarked model
+        dict_model = TrainModel.load_model(config_embed['save_path'])
+        dict_hufu = TrainModel.load_model(config_embed['save_path_hufu_finetune'])
+
+        model_wat = dict_model["supplementary"]["model"].to(config_embed["device"])
+        hufu_model = dict_hufu["supplementary"]["model"].to(config_embed["device"])
+
+        # fine tune the watermarked model
+        print("Check the accuracy of the watermarked model")
+        acc=TrainModel.evaluate(model_wat, test_loader, config_attack)
+        print("Compute the MSE from the original model (non watermarked)")
+        _, mse_after, _ = self.extract(deepcopy(model_wat), deepcopy(hufu_model), dict_model["supplementary"]["selected_indexes"],
+                     train_loader_hufu, config_embed)
+        print("MSE = ", mse_after)
+        print("Start fine-tuning")
+        results_acc = []
+        results_mse = []
+        # print(config_attack["epochs"])
+        # epochs = [config_attack["epochs"]*i for i in range(1, 4)]
+        epochs = [10,20,30,40,50]
+
+        # print(model_wat)
+        # print("conf attack")
+        # print(config_attack.keys())
+        # print("conf embe")
+        # print(config_embed.keys())
+        # print("conf data")
+        # print(config_data.keys())
+        for ep in epochs:
+            model_wat = TrainModel.fine_tune(model_wat, train_loader, test_loader, config_attack)
+            # check the accuracy and BER
+            _, mse_after, _ = self.extract(deepcopy(model_wat), deepcopy(hufu_model),
+                                           dict_model["supplementary"]["selected_indexes"],
+                                           train_loader_hufu, config_embed)
+            acc = TrainModel.evaluate(model_wat, test_loader, config_attack)
+            print(f"ACC and MSE after finetuning {ep}")
+            print("MSE = ", mse_after, "ACC = ", acc)
+            results_acc.append(acc)
+            results_mse.append(mse_after)
+        print("epochs = ", epochs)
+        print("results_acc = ", results_acc)
+        print("results_mse = ", results_mse)
+
+    def pruning_attack_hufu(self, config_embed, config_attack, config_data):
+        # Get data
+        train_loader, test_loader = Database.load_dataset_loaders(config_data)
+        train_loader_hufu, val_loader_hufu, test_loader_hufu = create_data_loaders_hufu(
+            batch_size=config_embed['batch_size_hufu'],
+            validation_split=config_embed['validation_split']
+        )
+
+        # load the watermarked model
+        dict_model = TrainModel.load_model(config_embed['save_path'])
+        dict_hufu = TrainModel.load_model(config_embed['save_path_hufu_finetune'])
+
+        model_wat = dict_model["supplementary"]["model"].to(config_embed["device"])
+        hufu_model = dict_hufu["supplementary"]["model"].to(config_embed["device"])
+
+        # fine tune the watermarked model
+        print("First check before pruning")
+        acc=TrainModel.evaluate(model_wat, test_loader, config_attack)
+        mse_before, mse_after, mse_non_wm=self.extract(deepcopy(model_wat), deepcopy(hufu_model), dict_model["supplementary"]["selected_indexes"],
+                     train_loader_hufu, config_embed)
+        print(f"acc: {acc}, mse_original: {mse_before}, mse_after_pruning: {mse_after}")
+        results_acc = []
+        results_mse = []
+        pruning_rate = [x / 10 for x in range(10)] + [0.95, 0.99, 1.]
+
+        for rate in pruning_rate:
+            model = pruning(model_wat, rate)
+            print("evaluate the model after pruning of amount", rate)
+            results_acc.append(TrainModel.evaluate(model, test_loader, config_attack))
+            mse_before, mse_after, mse_non_wm = self.extract(deepcopy(model), deepcopy(hufu_model),
+                                                             dict_model["supplementary"]["selected_indexes"],
+                                                             train_loader_hufu, config_embed)
+            results_mse.append(mse_after)
+
+        print("pruning_rate = ", pruning_rate)
+        print("mse_original = ", mse_before)
+        print("results_acc = ", results_acc)
+        print("results_mse = ", results_mse)
+    def train_embedding(self, config_data, config_embed):
+        init_model = TrainModel.get_model(config_embed["architecture"], config_embed["device"])
+
+        # Get the training and testing data
+        train_loader, test_loader = Database.load_dataset_loaders(config_data)
+
+        # embed the watermark
+        model_wat= self.embed(init_model, test_loader, train_loader, config_embed)
+        print(f"evaluate the watermarked model with {self.method}")
+        acc = TrainModel.evaluate(model_wat, test_loader, config_embed)
+        return acc
+
+
 
     @staticmethod
     def pia_attack(config_data, config_embed, config_attack):
@@ -488,6 +684,7 @@ class Tests:
         train_loader, test_loader = Database.load_dataset_loaders(config_data)
         # get model
         init_model = TrainModel.get_model(config_train["architecture"], config_train["device"])
+
         print("Model to train...")
         print(init_model)
         """Start training the model"""
@@ -513,3 +710,5 @@ class Tests:
         plt.title(f"ACC of {config_train['architecture']} over database = {config_train['database']}")
         plt.savefig(config_train['save_fig_path'])
         plt.show()
+
+
